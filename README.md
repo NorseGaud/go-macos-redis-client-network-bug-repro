@@ -1,125 +1,81 @@
-# Go macOS Network Issue Reproduction
+# macOS Networking Bug: "no route to host" After SSH Disconnect
 
-This reproduces a Go networking bug/limitation on macOS where TCP connections to local network addresses fail with "no route to host" after the SSH session that started the process ends.
+## Summary
 
-## The Issue
+On macOS, when a process is started via SSH and the SSH session disconnects,
+`connect()` fails to reach **local network** addresses with EHOSTUNREACH (65),
+while **internet** addresses continue to work.
 
-When a Go process is started via SSH → bash script → nohup/disown, after the parent bash script exits:
+## Reproduction
 
-| Test | Result |
-|------|--------|
-| go-redis client PING | ❌ **FAILS** - "no route to host" |
-| go-redis client SET/GET | ❌ **FAILS** - "no route to host" |
-| Go `net.Dial` to local network (10.8.x.x) | ❌ **FAILS** - "no route to host" |
-| Go `net.Dial` to internet (google.com) | ✅ Works |
-| Go `net.Dial` to internet IP (8.8.8.8) | ✅ Works |
-| System `ping` to local network | ✅ Works |
-| System `nc` (netcat) to local network | ✅ Works |
+### Prerequisites
 
-**Key observation**: The OS networking works perfectly (ping, nc succeed). Only Go's networking fails, and only for local network addresses.
+1. A remote macOS machine accessible via SSH
+2. A TCP service on your local network (e.g., Redis on port 6379)
+   - Must be on a **different host** than the remote Mac
+   - Must be reachable from the remote Mac
 
-## Environment
+### Steps
 
-- **OS**: macOS (tested on Apple Silicon M1/M2)
-- **Go**: 1.21+
-- **Network**: Local LAN with addresses in 10.8.x.x range
-- **Redis**: 10.8.100.100:6379
-- **Route type**: Interface-scoped (`IFSCOPE` flag) on en0
+1. Edit `repro.c` and set your local network target:
+   ```c
+   #define LOCAL_IP   "10.8.100.100"  // Change to your LAN IP
+   #define LOCAL_PORT 6379            // Change to your port
+   ```
 
-## Root Cause
+2. Run:
+   ```bash
+   ./run.sh user@remote-mac
+   ```
+
+### Expected Result
+
+**Before SSH disconnect:**
+```
+[TEST 1] C connect() to LOCAL network...
+  ✅ LOCAL: connected
+
+[TEST 2] C connect() to INTERNET...
+  ✅ INTERNET: connected
+```
+
+**After SSH disconnect:**
+```
+[TEST 1] C connect() to LOCAL network...
+  ❌ LOCAL: connect failed: No route to host (errno 65)
+
+[TEST 2] C connect() to INTERNET...
+  ✅ INTERNET: connected
+
+[TEST 3] System ping to local...
+  ✅ ping succeeded
+```
+
+## Analysis
 
 The route to the local network has the `IFSCOPE` flag:
 ```
-route to: 10.8.100.100
-interface: en0
 flags: <UP,HOST,DONE,LLINFO,WASCLONED,IFSCOPE,IFREF>
 ```
 
-When the SSH session ends and the process is orphaned:
-- System tools (ping, nc) handle IFSCOPE routes correctly
-- Go's networking does not properly use IFSCOPE routes for orphaned processes
-- Internet addresses work because they use different routing paths
+When SSH disconnects and the process loses its controlling terminal,
+macOS appears to invalidate the process's network interface context,
+causing interface-scoped route lookups to fail.
 
-## Reproduction Steps
-
-1. **Prerequisites**:
-   - macOS host accessible via SSH at `veertu@10.8.1.131` (configured in `~/.ssh/config`)
-   - Redis running at `10.8.100.100:6379`
-
-2. **Run the reproduction**:
-   ```bash
-   ./run-repro.bash
-   ```
-
-3. **Wait ~10 seconds** for the first test cycle after SSH disconnects
-
-4. **View the logs**:
-   ```bash
-   ssh veertu@10.8.1.131 'tail -f /tmp/network-test.log'
-   ```
-
-5. **Expected output** (after parent script exits):
-   ```
-   [TEST 1] go-redis client PING to Redis...
-     ❌ FAILED: dial tcp 10.8.100.100:6379: connect: no route to host
-
-   [TEST 2] go-redis client SET/GET...
-     ❌ SET FAILED: dial tcp 10.8.100.100:6379: connect: no route to host
-
-   [TEST 3] Go net.DialTimeout to Redis (local network)...
-     ❌ FAILED: dial tcp 10.8.100.100:6379: connect: no route to host
-
-   [TEST 4] Go net.DialTimeout to Google (internet)...
-     ✅ SUCCEEDED
-
-   [TEST 6] System ping to Redis host...
-     ✅ SUCCEEDED
-
-   [TEST 7] System nc (netcat) to Redis...
-     ✅ SUCCEEDED
-   ```
-
-## How It Works
-
-The reproduction uses two scripts:
-
-1. **`run-repro.bash`** (wrapper - runs locally):
-   - Builds the Go binary for macOS ARM64
-   - SCPs the binary and start script to the remote host
-   - Executes the start script via SSH
-
-2. **`start-test.bash`** (inner - runs on remote host):
-   - Starts the Go binary with `nohup ... & disown`
-   - **Exits** - this is when the issue manifests
-   - The Go process continues running but can't reach local network
-
-## Things That Don't Fix It
-
-- `nohup` - does not help
-- `disown` - does not help  
-- `setsid` - does not help
-- Removing `-t` flag from SSH - does not help
-- Explicit `LocalAddr` binding to en0's IP - does not help
-- Setting `IP_BOUND_IF` socket option - does not help
-
-## Workarounds
-
-1. **Keep SSH session alive**: Don't let the SSH session end (e.g., `tail -f` the logs)
-2. **Use screen/tmux**: Start the process in a detached screen session
-3. **Use launchd**: Run the process as a proper macOS service via launchd
-4. **Proxy through nc**: Shell out to `nc` for local network connections (hacky)
+- **Internet works**: Routes via default gateway aren't interface-scoped
+- **Ping works**: Spawned as new process with fresh network context
+- **Local fails**: Interface-scoped routes require valid context
 
 ## Files
 
-- `main.go` - Go test program using go-redis client
-- `go.mod` / `go.sum` - Go module files
-- `run-repro.bash` - Wrapper script (runs locally)
-- `start-test.bash` - Inner script (copied to and runs on remote host)
-- `README.md` - This file
-
-## Cleanup
-
-To stop the test on the remote host:
-```bash
-ssh veertu@10.8.1.131 'pkill -f network-test'
 ```
+repro.c   - C reproduction (~140 lines, zero dependencies)
+run.sh    - Run from your local machine
+start.sh  - Runs on the remote macOS host
+```
+
+## Workarounds
+
+1. Use `setsid` before starting the process
+2. Use `launchd` instead of SSH + nohup
+3. Use `screen -dmS name ./binary`
