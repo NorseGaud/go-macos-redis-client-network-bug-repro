@@ -30,8 +30,9 @@ echo "[3/3] Starting test (SSH will disconnect after)..."
 ssh -t "$REMOTE" "/tmp/start.sh"
 
 echo ""
-echo "SSH closed. Waiting 15s..."
-sleep 10
+echo "SSH closed. Waiting 45s for tests + permission dialog delay..."
+echo "(The process now waits 30s after failure for macOS to show permission dialog)"
+sleep 45
 
 echo ""
 echo "=== Results after disconnect ==="

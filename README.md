@@ -74,8 +74,43 @@ run.sh    - Run from your local machine
 start.sh  - Runs on the remote macOS host
 ```
 
+## Apple Feedback (TN3179)
+
+Apple's response indicates this may be related to **Local Network Privacy** (introduced in macOS 15):
+
+> macOS fails to display the local network alert when a process with a very short lifespan performs a local network operation (FB16131937). For example, if you create a launchd agent that performs a local network operation and immediately exits when that fails, macOS won't display the local network alert. To work around this, update your code to not exit immediately after a local network operation fails.
+
+See: https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy/
+
+The system logs show the issue:
+```
+Got local network blocked notification: pid: 2966, uuid: ..., bundle_id: (null)
+Failed to get the signing identifier for 2966: No such process
+LocalNetwork: did not find bundle ID for UUID ...
+Failed to find bundle ID, ignoring
+```
+
+Key observations:
+- The process has **no bundle ID** (`bundle_id: (null)`)
+- By the time `UserEventAgent` processes the block event, the process context is lost
+- Without a bundle ID, macOS cannot associate the permission with the app
+
 ## Workarounds
 
-1. Use `setsid` before starting the process
-2. Use `launchd` instead of SSH + nohup
-3. Use `screen -dmS name ./binary`
+1. **Keep process alive after failure** - The code now waits 30 seconds after a local network failure to allow macOS time to process the block event and potentially show a permission dialog.
+
+2. **Use a signed app bundle** - Create an app bundle with a proper `Info.plist` containing:
+   - `CFBundleIdentifier` 
+   - `NSLocalNetworkUsageDescription`
+   - `NSBonjourServices` (if using Bonjour)
+
+3. Use `setsid` before starting the process
+
+4. Use `launchd` instead of SSH + nohup
+
+5. Use `screen -dmS name ./binary`
+
+## Related
+
+- [Apple TN3179: Understanding Local Network Privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy/)
+- Apple Feedback: FB16131937 (short-lived process issue)

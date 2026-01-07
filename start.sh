@@ -19,7 +19,8 @@ disown
 echo $! > "$PID"
 
 echo "PID: $(cat $PID)"
-sleep 12
+echo "Waiting for first test cycle (includes 30s delay if local network fails)..."
+sleep 45
 
 echo ""
 head -40 "$LOG"

@@ -5,6 +5,12 @@
  * to local network addresses with EHOSTUNREACH (65), while internet
  * addresses continue to work.
  *
+ * NOTE: Per Apple TN3179, macOS fails to display the local network alert
+ * when a process with a very short lifespan performs a local network 
+ * operation. We add delays after failures to allow the system to process
+ * the block event and potentially show a permission dialog.
+ * See: https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy/
+ *
  * Compile: clang -o repro_c repro.c
  * Usage:   See README.md for reproduction steps
  */
@@ -29,15 +35,20 @@
 #define INET_IP    "8.8.8.8"
 #define INET_PORT  53
 
-int test_connect(const char *label, const char *ip, int port) {
+/* Delay after local network failure to allow macOS to process block event */
+#define POST_FAILURE_DELAY_SECS 30
+
+int test_connect(const char *label, const char *ip, int port, int is_local) {
     int sock;
     struct sockaddr_in addr;
     int result;
+    int failed = 0;
     
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         printf("  ❌ %s: socket() failed: %s\n", label, strerror(errno));
-        return -1;
+        failed = 1;
+        goto done;
     }
     
     /* Set non-blocking for timeout */
@@ -80,19 +91,38 @@ int test_connect(const char *label, const char *ip, int port) {
                 printf("  ❌ %s: connect failed: %s (errno %d)\n", 
                        label, strerror(so_error), so_error);
                 close(sock);
-                return -1;
+                failed = 1;
+                goto done;
             }
         } else if (result == 0) {
             printf("  ❌ %s: connect timeout\n", label);
             close(sock);
-            return -1;
+            failed = 1;
+            goto done;
         }
     }
     
     printf("  ❌ %s: connect failed: %s (errno %d)\n", 
            label, strerror(errno), errno);
     close(sock);
-    return -1;
+    failed = 1;
+
+done:
+    /*
+     * Per Apple TN3179: macOS fails to display local network alert when a 
+     * process exits too quickly after a local network operation fails.
+     * We wait here to give UserEventAgent time to process the block event
+     * and potentially show a permission dialog.
+     */
+    if (failed && is_local) {
+        printf("  ⏳ Waiting %d seconds for macOS to process block event...\n", 
+               POST_FAILURE_DELAY_SECS);
+        printf("     (Check if a Local Network permission dialog appears)\n");
+        sleep(POST_FAILURE_DELAY_SECS);
+        printf("  ⏳ Wait complete.\n");
+    }
+    
+    return failed ? -1 : 0;
 }
 
 void print_tty_info(void) {
@@ -116,11 +146,11 @@ void run_tests(void) {
     
     printf("\n[TEST 1] C connect() to LOCAL network (%s:%d)...\n", 
            LOCAL_IP, LOCAL_PORT);
-    test_connect("LOCAL", LOCAL_IP, LOCAL_PORT);
+    test_connect("LOCAL", LOCAL_IP, LOCAL_PORT, 1 /* is_local */);
     
     printf("\n[TEST 2] C connect() to INTERNET (%s:%d)...\n",
            INET_IP, INET_PORT);
-    test_connect("INTERNET", INET_IP, INET_PORT);
+    test_connect("INTERNET", INET_IP, INET_PORT, 0 /* is_local */);
     
     printf("\n[TEST 3] System ping to local...\n");
     char cmd[256];
