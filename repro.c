@@ -125,43 +125,62 @@ done:
     return failed ? -1 : 0;
 }
 
-void print_tty_info(void) {
-    char *tty = ttyname(STDIN_FILENO);
-    printf("TTY: %s\n", tty ? tty : "not a tty");
-    printf("PID: %d, PPID: %d\n", getpid(), getppid());
-}
+static int test_cycle = 0;
+static int had_tty = -1;  /* -1 = unknown, 0 = no, 1 = yes */
 
 void run_tests(void) {
     time_t now;
     char timebuf[64];
+    char *tty;
+    int has_tty;
+    
+    test_cycle++;
     
     time(&now);
-    strftime(timebuf, sizeof(timebuf), "%Y-%m-%dT%H:%M:%S", localtime(&now));
+    strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", localtime(&now));
     
-    printf("-------------------------------------------\n");
-    printf("Test at: %s\n", timebuf);
-    printf("-------------------------------------------\n");
+    tty = ttyname(STDIN_FILENO);
+    has_tty = (tty != NULL);
     
-    print_tty_info();
+    printf("╔══════════════════════════════════════════════════════════════╗\n");
+    printf("║  TEST CYCLE #%d                                               \n", test_cycle);
+    printf("║  Time: %s                                    \n", timebuf);
+    printf("╠══════════════════════════════════════════════════════════════╣\n");
     
-    printf("\n[TEST 1] C connect() to LOCAL network (%s:%d)...\n", 
-           LOCAL_IP, LOCAL_PORT);
+    /* Detect TTY change (SSH disconnect) */
+    if (had_tty == -1) {
+        had_tty = has_tty;
+        printf("║  TTY:  %s\n", tty ? tty : "(none - no controlling terminal)");
+    } else if (had_tty == 1 && has_tty == 0) {
+        printf("║  TTY:  *** CHANGED: was connected, now DETACHED ***\n");
+        printf("║        (SSH session likely disconnected)\n");
+        had_tty = 0;
+    } else {
+        printf("║  TTY:  %s\n", tty ? tty : "(none - no controlling terminal)");
+    }
+    
+    printf("║  PID:  %d   PPID: %d\n", getpid(), getppid());
+    printf("╚══════════════════════════════════════════════════════════════╝\n");
+    
+    printf("\n[TEST 1/3] connect() to LOCAL network %s:%d\n", LOCAL_IP, LOCAL_PORT);
     test_connect("LOCAL", LOCAL_IP, LOCAL_PORT, 1 /* is_local */);
     
-    printf("\n[TEST 2] C connect() to INTERNET (%s:%d)...\n",
-           INET_IP, INET_PORT);
+    printf("\n[TEST 2/3] connect() to INTERNET %s:%d\n", INET_IP, INET_PORT);
     test_connect("INTERNET", INET_IP, INET_PORT, 0 /* is_local */);
     
-    printf("\n[TEST 3] System ping to local...\n");
+    printf("\n[TEST 3/3] System ping to local network\n");
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "ping -c 1 -t 2 %s >/dev/null 2>&1", LOCAL_IP);
     if (system(cmd) == 0) {
-        printf("  ✅ ping succeeded\n");
+        printf("  ✅ ping succeeded (spawned as new process)\n");
     } else {
         printf("  ❌ ping failed\n");
     }
     
-    printf("\n-------------------------------------------\n\n");
+    printf("\n────────────────────────────────────────────────────────────────\n");
+    printf("  CYCLE #%d SUMMARY:\n", test_cycle);
+    printf("    Next test in 10 seconds...\n");
+    printf("────────────────────────────────────────────────────────────────\n\n");
 }
 
 int main(void) {
@@ -169,15 +188,19 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     
-    printf("============================================\n");
-    printf("macOS Networking Issue - C Reproduction\n");
-    printf("============================================\n");
-    printf("PID: %d, PPID: %d\n", getpid(), getppid());
-    printf("Local target: %s:%d\n", LOCAL_IP, LOCAL_PORT);
-    printf("Internet target: %s:%d\n", INET_IP, INET_PORT);
-    printf("============================================\n\n");
-    printf("Running tests every 10 seconds.\n");
-    printf("Start via SSH, then disconnect.\n\n");
+    printf("\n");
+    printf("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n");
+    printf("┃  macOS Local Network Bug - Test Process                        ┃\n");
+    printf("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n");
+    printf("┃  PID:      %d\n", getpid());
+    printf("┃  PPID:     %d\n", getppid());
+    printf("┃  Local:    %s:%d\n", LOCAL_IP, LOCAL_PORT);
+    printf("┃  Internet: %s:%d\n", INET_IP, INET_PORT);
+    printf("┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n");
+    printf("┃  Running connectivity tests every 10 seconds.                  ┃\n");
+    printf("┃  Watch for TTY change = SSH disconnect detected.               ┃\n");
+    printf("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n");
+    printf("\n");
     
     while (1) {
         run_tests();
