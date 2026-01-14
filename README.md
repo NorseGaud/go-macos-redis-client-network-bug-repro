@@ -1,5 +1,20 @@
 # macOS Networking Bug: "no route to host" After SSH Disconnect
 
+**UPDATE**: After back and forth with Apple, the logs were showing:
+
+```
+2026-01-07 15:07:47.292 I  UserEventAgent[106:af8072] [com.apple.networkextension:] Got local network blocked notification: pid: 28122, uuid: 7B4C4BEF-2590-36B3-87B9-A55C3A91AF1F, bundle_id: (null)
+```
+
+The solution they provided was to run the following commands:
+
+```
+sudo defaults write com.apple.network.local-network AllowedEthernetLocalNetworkAddresses -array "10.8.0.0/16"
+sudo defaults write com.apple.network.local-network AllowedWiFiLocalNetworkAddresses -array "10.8.0.0/16"
+defaults write com.apple.network.local-network AllowedEthernetLocalNetworkAddresses -array "10.8.0.0/16"
+defaults write com.apple.network.local-network AllowedWiFiLocalNetworkAddresses -array "10.8.0.0/16"
+```
+
 ## Summary
 
 On macOS, when a process is started via SSH and the SSH session disconnects,
