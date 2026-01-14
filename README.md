@@ -110,21 +110,6 @@ Key observations:
 - By the time `UserEventAgent` processes the block event, the process context is lost
 - Without a bundle ID, macOS cannot associate the permission with the app
 
-## Workarounds
-
-1. **Keep process alive after failure** - The code now waits 30 seconds after a local network failure to allow macOS time to process the block event and potentially show a permission dialog.
-
-2. **Use a signed app bundle** - Create an app bundle with a proper `Info.plist` containing:
-   - `CFBundleIdentifier` 
-   - `NSLocalNetworkUsageDescription`
-   - `NSBonjourServices` (if using Bonjour)
-
-3. Use `setsid` before starting the process
-
-4. Use `launchd` instead of SSH + nohup
-
-5. Use `screen -dmS name ./binary`
-
 ## Related
 
 - [Apple TN3179: Understanding Local Network Privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy/)
